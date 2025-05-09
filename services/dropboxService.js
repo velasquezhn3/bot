@@ -5,158 +5,198 @@ const crypto = require('crypto');
 const { Dropbox } = require('dropbox');
 const axios = require('axios');
 
-// 1. Configuración de variables de entorno
-const CLIENT_ID = process.env.DROPBOX_CLIENT_ID;
-const CLIENT_SECRET = process.env.DROPBOX_CLIENT_SECRET;
-const REFRESH_TOKEN = process.env.DROPBOX_REFRESH_TOKEN;
+// 1. Configuración de credenciales
+const DROPBOX_CONFIG = {
+  clientId: process.env.DROPBOX_CLIENT_ID,
+  clientSecret: process.env.DROPBOX_CLIENT_SECRET,
+  refreshToken: process.env.DROPBOX_REFRESH_TOKEN
+};
 
-// Verificar que todas las variables estén configuradas
-if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH_TOKEN) {
-  console.error('ERROR: Las siguientes variables de entorno deben estar configuradas:');
+// 2. Verificación de credenciales
+if (!DROPBOX_CONFIG.clientId || !DROPBOX_CONFIG.clientSecret || !DROPBOX_CONFIG.refreshToken) {
+  console.error('ERROR: Configuración incompleta de Dropbox');
+  console.error('Se requieren las siguientes variables de entorno:');
   console.error('- DROPBOX_CLIENT_ID');
   console.error('- DROPBOX_CLIENT_SECRET');
   console.error('- DROPBOX_REFRESH_TOKEN');
   process.exit(1);
 }
 
-// 2. Variables globales para manejar la conexión
-let dbxInstance = null;
-let currentAccessToken = null;
+// 3. Estado de la conexión
+let dropboxInstance = null;
+let accessToken = null;
+let lastTokenRefresh = null;
 
-// 3. Función para refrescar el token de acceso
-async function refreshAccessToken() {
+// 4. Función para refrescar el token con manejo robusto de errores
+async function refreshDropboxToken() {
   try {
+    console.log('Refrescando token de acceso a Dropbox...');
+    
     const response = await axios.post('https://api.dropbox.com/oauth2/token', null, {
       params: {
         grant_type: 'refresh_token',
-        refresh_token: REFRESH_TOKEN,
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET
+        refresh_token: DROPBOX_CONFIG.refreshToken,
+        client_id: DROPBOX_CONFIG.clientId,
+        client_secret: DROPBOX_CONFIG.clientSecret
       },
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded'
-      }
+      },
+      timeout: 10000 // 10 segundos de timeout
     });
 
-    currentAccessToken = response.data.access_token;
-    console.log('Token de acceso refrescado exitosamente');
-    return currentAccessToken;
+    accessToken = response.data.access_token;
+    lastTokenRefresh = new Date();
+    
+    console.log('Token refrescado exitosamente');
+    return accessToken;
   } catch (error) {
-    console.error('ERROR AL REFRESCAR TOKEN:', {
+    console.error('ERROR CRÍTICO al refrescar token:', {
       status: error.response?.status,
-      data: error.response?.data,
-      message: error.message
+      code: error.code,
+      message: error.message,
+      responseData: error.response?.data
     });
-    throw new Error('No se pudo refrescar el token de acceso a Dropbox');
+    
+    throw new Error('No se pudo renovar el token de acceso a Dropbox');
   }
 }
 
-// 4. Función para obtener la instancia de Dropbox
-async function getDropboxInstance() {
-  if (!dbxInstance || !currentAccessToken) {
-    await refreshAccessToken();
-    dbxInstance = new Dropbox({ 
-      accessToken: currentAccessToken,
+// 5. Función para obtener instancia de Dropbox con token fresco
+async function getDropboxClient() {
+  // Si no hay token o el token tiene más de 1 hora, refrescar
+  if (!accessToken || (lastTokenRefresh && (new Date() - lastTokenRefresh) > 3600000)) {
+    await refreshDropboxToken();
+  }
+
+  if (!dropboxInstance) {
+    dropboxInstance = new Dropbox({ 
+      accessToken,
       fetch: require('node-fetch').default
     });
   }
-  return dbxInstance;
+
+  return dropboxInstance;
 }
 
-// 5. Configuración del sistema de caché
-const cacheDir = path.join(os.tmpdir(), 'dropbox_cache');
-if (!fs.existsSync(cacheDir)) {
-  fs.mkdirSync(cacheDir, { recursive: true });
+// 6. Sistema de caché mejorado
+const CACHE_SETTINGS = {
+  dir: path.join(os.tmpdir(), 'dropbox_cache_v2'),
+  ttl: 3600000 // 1 hora
+};
+
+if (!fs.existsSync(CACHE_SETTINGS.dir)) {
+  fs.mkdirSync(CACHE_SETTINGS.dir, { recursive: true });
 }
 
-// 6. Función para generar hash de rutas (para nombres de archivos en caché)
-function hashString(str) {
-  return crypto.createHash('sha256').update(str).digest('hex');
+function getCacheKey(filePath) {
+  return crypto.createHash('sha256').update(filePath).digest('hex');
 }
 
-// 7. Función para obtener la ruta local del archivo en caché
-function getCacheFilePath(dropboxPath) {
-  const hashedName = hashString(dropboxPath);
-  return path.join(cacheDir, hashedName);
+function getCachedFilePath(dropboxPath) {
+  return path.join(CACHE_SETTINGS.dir, getCacheKey(dropboxPath));
 }
 
-// 8. Función principal para descargar archivos con manejo de errores
-async function downloadFile(dropboxPath, maxRetries = 3) {
-  const localPath = getCacheFilePath(dropboxPath);
-  const metaPath = localPath + '.meta.json';
+// 7. Función principal para descargar archivos con reintentos
+async function downloadWithRetry(dropboxPath, options = {}) {
+  const {
+    maxRetries = 3,
+    useCache = true,
+    forceRefresh = false
+  } = options;
 
-  // Verificar si el archivo ya está en caché y es actual
-  if (fs.existsSync(localPath) && fs.existsSync(metaPath)) {
+  const cachedPath = getCachedFilePath(dropboxPath);
+  const metaPath = `${cachedPath}.meta`;
+
+  // Verificar caché si está habilitado y no se fuerza refresco
+  if (useCache && !forceRefresh && fs.existsSync(cachedPath) && fs.existsSync(metaPath)) {
     try {
-      const cachedMeta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-      const dbx = await getDropboxInstance();
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      const dbx = await getDropboxClient();
       const currentMeta = await dbx.filesGetMetadata({ path: dropboxPath });
       
-      if (currentMeta.result.rev === cachedMeta.rev) {
-        console.log(`Usando versión en caché de: ${dropboxPath}`);
-        return localPath;
+      if (currentMeta.result.rev === meta.rev) {
+        console.log(`[CACHÉ] Usando versión almacenada de: ${dropboxPath}`);
+        return cachedPath;
       }
     } catch (error) {
-      console.warn('Advertencia al verificar caché:', error.message);
+      console.warn(`[CACHÉ] Error al verificar metadatos: ${error.message}`);
     }
   }
 
-  // Intentar descargar el archivo
   let lastError = null;
-  
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  let attempt = 0;
+
+  while (attempt < maxRetries) {
+    attempt++;
     try {
-      const dbx = await getDropboxInstance();
+      const dbx = await getDropboxClient();
       const response = await dbx.filesDownload({ path: dropboxPath });
-      
+
       // Guardar archivo y metadatos
-      fs.writeFileSync(localPath, response.result.fileBinary, 'binary');
+      fs.writeFileSync(cachedPath, response.result.fileBinary, 'binary');
       fs.writeFileSync(metaPath, JSON.stringify({
         rev: response.result.rev,
         server_modified: response.result.server_modified,
-        last_updated: new Date().toISOString()
+        cached_at: new Date().toISOString()
       }));
 
-      console.log(`Archivo descargado exitosamente: ${dropboxPath}`);
-      return localPath;
+      console.log(`[DESCARGA] Archivo obtenido: ${dropboxPath}`);
+      return cachedPath;
     } catch (error) {
       lastError = error;
       
-      if (error.status === 401 && attempt < maxRetries) {
-        console.log(`Token expirado (intento ${attempt}/${maxRetries}), refrescando...`);
-        dbxInstance = null;
-        currentAccessToken = null;
+      // Manejo específico para token expirado
+      if (error.status === 401 || error?.error?.error?.['.tag'] === 'expired_access_token') {
+        console.log(`[TOKEN] Detectado token expirado (intento ${attempt}/${maxRetries})`);
+        dropboxInstance = null;
+        accessToken = null;
+        await refreshDropboxToken();
         continue;
       }
-      
+
+      // Para otros errores, romper el ciclo
       break;
     }
   }
 
-  console.error(`ERROR después de ${maxRetries} intentos al descargar: ${dropboxPath}`);
-  throw lastError || new Error('Error desconocido al descargar archivo');
+  console.error(`[ERROR] Fallo después de ${attempt} intentos con: ${dropboxPath}`);
+  throw lastError || new Error(`Error al descargar ${dropboxPath}`);
 }
 
-// 9. Función para verificar la conexión
-async function testConnection() {
+// 8. Función para verificar conexión
+async function verifyDropboxConnection() {
   try {
-    const dbx = await getDropboxInstance();
+    const dbx = await getDropboxClient();
     const account = await dbx.usersGetCurrentAccount();
     
-    if (account?.result?.name?.display_name) {
-      console.log(`Conectado a Dropbox como: ${account.result.name.display_name}`);
-      return true;
+    if (!account?.result?.name?.display_name) {
+      throw new Error('Respuesta inesperada de la API');
     }
-    throw new Error('Respuesta inesperada de la API');
+    
+    console.log(`[CONEXIÓN] Conectado a Dropbox como: ${account.result.name.display_name}`);
+    return true;
   } catch (error) {
-    console.error('ERROR DE CONEXIÓN A DROPBOX:', error);
+    console.error('[CONEXIÓN] Error de conexión:', {
+      message: error.message,
+      stack: error.stack
+    });
     return false;
   }
 }
 
-// 10. Exportar funciones
+// 9. Inicialización automática al cargar el módulo
+(async () => {
+  try {
+    await verifyDropboxConnection();
+  } catch (error) {
+    console.error('[INICIO] Error al verificar conexión inicial:', error);
+  }
+})();
+
 module.exports = {
-  downloadFile,
-  testConnection,
-  getDropboxInstance
+  downloadFile: downloadWithRetry,
+  verifyConnection: verifyDropboxConnection,
+  getClient: getDropboxClient,
+  refreshToken: refreshDropboxToken
 };
