@@ -95,7 +95,7 @@ async function enviarEstadoPagos(bot, remitente, estudiante) {
   respuesta += `\n📅 Meses pendientes: ${deuda.mesesPendientes.length}`;
   respuesta += deuda.alDia
     ? '\n\n✅ *AL DÍA EN PAGOS*'
-    : `\n\n❌ *DEUDA TOTAL: L.${deuda.totalDeuda}*\n(Cuota × Meses pendientes)`;
+    : `\n\n❌ *DEUDA MENSUALIDAD: L.${deuda.deudaMensualidad}*\n❌ *DEUDA MORA: L.${deuda.deudaMora}*\n❌ *DEUDA TOTAL: L.${deuda.totalDeuda}*`;
 
   if (estudiante.totalPagar < 10) {
     respuesta += `\n\n[DEBUG] Valor original: ${JSON.stringify(estudiante.valorCeldaOriginal)}`;

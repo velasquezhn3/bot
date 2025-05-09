@@ -80,7 +80,10 @@ async function buscarEstudiante(id) {
  */
 function calcularDeuda(estudiante) {
   const ahora = new Date();
+  const diaActual = ahora.getDate();
   const mesActual = ahora.getMonth() + 1;
+  const anioActual = ahora.getFullYear();
+
   const meses = Object.keys(columnas.MESES).map((mes, index) => ({
     nombre: mes.toLowerCase(),
     num: index + 1
@@ -89,6 +92,7 @@ function calcularDeuda(estudiante) {
   // Determine starting month based on planDePago
   const inicioMes = estudiante.planDePago === 10 ? 2 : 1;
 
+  // Filter months to check for pending payments starting from inicioMes to mesActual
   const mesesPendientes = meses
     .filter(m => m.num >= inicioMes && m.num <= mesActual)
     .filter(m => {
@@ -96,12 +100,35 @@ function calcularDeuda(estudiante) {
       return !valor || valor.toString().trim() === '';
     });
 
-  const totalDeuda = (estudiante.totalPagar * mesesPendientes.length).toFixed(2);
+  // Calculate mora (late fee)
+  let deudaMora = 0;
+  const cuotaMensual = estudiante.totalPagar;
+
+  mesesPendientes.forEach(mesPendiente => {
+    // Calculate the due date plus 10 days for the month
+    // Due date is the 1st of the next month + 10 days grace period
+    let anioMes = anioActual;
+    let mesNum = mesPendiente.num;
+    // If the month is December and current month is January, adjust year accordingly
+    if (mesNum === 12 && mesActual === 1) {
+      anioMes = anioActual - 1;
+    }
+    const fechaVencimiento = new Date(anioMes, mesNum, 11); // month is 0-based, so mesNum is next month index
+
+    if (ahora > fechaVencimiento) {
+      deudaMora += cuotaMensual * 0.05;
+    }
+  });
+
+  const deudaMensualidad = cuotaMensual * mesesPendientes.length;
+  const totalDeuda = deudaMensualidad + deudaMora;
 
   return {
-    totalDeuda,
+    deudaMensualidad: deudaMensualidad.toFixed(2),
+    deudaMora: deudaMora.toFixed(2),
+    totalDeuda: totalDeuda.toFixed(2),
     mesesPendientes: mesesPendientes.map(m => m.nombre.toUpperCase()),
-    cuotaMensual: estudiante.totalPagar.toFixed(2),
+    cuotaMensual: cuotaMensual.toFixed(2),
     alDia: mesesPendientes.length === 0
   };
 }
