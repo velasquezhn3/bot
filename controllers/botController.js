@@ -86,7 +86,8 @@ async function enviarEstadoPagos(bot, remitente, estudiante) {
   mesesKeys
     .filter(mes => mesesHastaActualLower.includes(mes.toLowerCase()))
     .forEach(mes => {
-      const estado = estudiante.meses[mes] ? '✅ Pagado' : '❌ Pendiente';
+      const valorMes = estudiante.meses[mes];
+      const estado = valorMes ? `L.${parseFloat(valorMes).toFixed(2)} ✅ Pagado` : '❌ Pendiente';
       respuesta += `▫️ ${mes.charAt(0).toUpperCase() + mes.slice(1)}: ${estado}\n`;
     });
 
