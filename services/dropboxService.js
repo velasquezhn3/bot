@@ -15,14 +15,11 @@ if (!CLIENT_ID || !CLIENT_SECRET || !REFRESH_TOKEN) {
 
 let dbx = null;
 
-async function getDropboxInstance() {
-  if (dbx) {
-    return dbx;
-  }
+// ===== [NUEVO] Función para refrescar el token =====
+async function refreshDropboxToken() {
   const fetchModule = await import('node-fetch');
   const fetch = fetchModule.default;
 
-  // Get new access token using refresh token
   const tokenResponse = await fetch('https://api.dropbox.com/oauth2/token', {
     method: 'POST',
     headers: {
@@ -42,16 +39,28 @@ async function getDropboxInstance() {
   }
 
   const tokenData = await tokenResponse.json();
-  const accessToken = tokenData.access_token;
+  return tokenData.access_token;
+}
 
-  dbx = new Dropbox({ accessToken, fetch });
+// ===== [MODIFICADA] Función getDropboxInstance con manejo de token expirado =====
+async function getDropboxInstance() {
+  if (dbx) {
+    return dbx;
+  }
 
-  // Test connection
+  const accessToken = await refreshDropboxToken();
+  const fetchModule = await import('node-fetch');
+  dbx = new Dropbox({ 
+    accessToken, 
+    fetch: fetchModule.default 
+  });
+
+  // Test connection (tu implementación original)
   try {
     const currentAccount = await dbx.usersGetCurrentAccount();
     console.log('Dropbox connection response:', JSON.stringify(currentAccount, null, 2));
-    if (currentAccount && currentAccount.name && currentAccount.name.display_name) {
-      console.log('Dropbox connection successful:', currentAccount.name.display_name);
+    if (currentAccount && currentAccount.result && currentAccount.result.name && currentAccount.result.name.display_name) {
+      console.log('Dropbox connection successful:', currentAccount.result.name.display_name);
     } else {
       console.warn('Dropbox connection response missing name.display_name property');
     }
@@ -115,7 +124,7 @@ async function downloadFile(dropboxPath) {
     }
   }
 
-  // Download file from Dropbox
+  // Download file from Dropbox (con reintento si el token expiró)
   try {
     const dbx = await getDropboxInstance();
     const response = await dbx.filesDownload({ path: dropboxPath });
@@ -133,6 +142,13 @@ async function downloadFile(dropboxPath) {
 
     return localPath;
   } catch (error) {
+    // ===== [NUEVO] Manejo específico para token expirado =====
+    if (error.error?.error?.['.tag'] === 'expired_access_token') {
+      console.log('Token expirado detectado, refrescando...');
+      dbx = null; // Forzar nueva instancia con token fresco
+      return downloadFile(dropboxPath); // Reintentar
+    }
+    
     console.error('Error downloading file from Dropbox:', error);
     throw error;
   }
