@@ -55,6 +55,7 @@ async function buscarEstudiante(id) {
           nombre: row.getCell(columnas.NOMBRE).value,
           grado: row.getCell(columnas.GRADO).value,
           id,
+          planDePago: row.getCell('H').value,  // Added planDePago from column H
           meses: Object.entries(columnas.MESES).reduce((acc, [mes, col]) => {
             acc[mes.toLowerCase()] = row.getCell(col).value;
             return acc;
@@ -85,8 +86,11 @@ function calcularDeuda(estudiante) {
     num: index + 1
   }));
 
+  // Determine starting month based on planDePago
+  const inicioMes = estudiante.planDePago === 10 ? 2 : 1;
+
   const mesesPendientes = meses
-    .filter(m => m.num <= mesActual)
+    .filter(m => m.num >= inicioMes && m.num <= mesActual)
     .filter(m => {
       const valor = estudiante.meses[m.nombre];
       return !valor || valor.toString().trim() === '';

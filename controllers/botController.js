@@ -72,7 +72,11 @@ async function enviarEstadoPagos(bot, remitente, estudiante) {
   // Define ordered months array in lowercase
   const mesesOrdenados = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
   const mesActualIndex = new Date().getMonth(); // 0-based index
-  const mesesHastaActualLower = mesesOrdenados.slice(0, mesActualIndex + 1);
+
+  // Determine starting month index based on planDePago
+  const inicioMesIndex = estudiante.planDePago === 10 ? 1 : 0; // febrero index 1, enero index 0
+
+  const mesesHastaActualLower = mesesOrdenados.slice(inicioMesIndex, mesActualIndex + 1);
 
   const mesesKeys = Object.keys(estudiante.meses);
 
