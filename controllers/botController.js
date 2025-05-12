@@ -21,7 +21,9 @@ const {
 } = require('../services/encargadoService');
 const {
   establecerEstado,
-  obtenerEstado
+  obtenerEstado,
+  establecerUltimoSaludo,
+  obtenerUltimoSaludo
 } = require('../services/stateService');
 const { infoEscuela, dataDir } = require('../config/config');
 
@@ -104,6 +106,16 @@ async function enviarEstadoPagos(bot, remitente, estudiante) {
   await bot.sendMessage(remitente, { text: respuesta });
 }
 
+async function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function enviarMensajeConDelay(bot, remitente, mensaje) {
+  const delayMs = Math.floor(Math.random() * 10000) + 1000; // 1 to 10 seconds
+  await delay(delayMs);
+  await bot.sendMessage(remitente, mensaje);
+}
+
 /**
  * Procesa los mensajes recibidos y maneja la lógica de conversación.
  * @param {Object} bot - Instancia del bot.
@@ -115,6 +127,22 @@ async function procesarMensaje(bot, remitente, mensaje) {
   const alumnos = obtenerAlumnosEncargado(remitente);
   const textoMinuscula = mensaje.toLowerCase();
 
+  // Check if greeting was sent today
+  const hoy = new Date().toISOString().slice(0, 10);
+  const ultimoSaludo = obtenerUltimoSaludo(remitente);
+  let esPrimerMensajeDelDia = false;
+
+  if (ultimoSaludo !== hoy) {
+    esPrimerMensajeDelDia = true;
+    establecerUltimoSaludo(remitente, hoy);
+    const saludo = `🐺 ¡Hola! Soy Chilo el lobo asistente virtual del Instituto José Cecilio del Valle.\nEstoy aquí para ayudarte. ¿En qué puedo asistirte hoy? 📚✨.`;
+    await enviarMensajeConDelay(bot, remitente, { text: saludo });
+    // Set state to MENU_PRINCIPAL after greeting
+    establecerEstado(remitente, 'MENU_PRINCIPAL');
+    await enviarMenuPrincipal(bot, remitente);
+    return;
+  }
+
   if (textoMinuscula === 'menu' || textoMinuscula === 'menú') {
     await enviarMenuPrincipal(bot, remitente);
     return;
@@ -125,14 +153,14 @@ async function procesarMensaje(bot, remitente, mensaje) {
       switch (mensaje) {
         case '1':
           establecerEstado(remitente, 'REGISTRO_ID');
-          await bot.sendMessage(remitente, {
+          await enviarMensajeConDelay(bot, remitente, {
             text: '📝 *REGISTRO DE ALUMNO*\n\nPor favor, ingrese el número de identidad del alumno (13 dígitos):'
           });
           break;
 
         case '2':
           if (alumnos.length === 0) {
-            await bot.sendMessage(remitente, {
+            await enviarMensajeConDelay(bot, remitente, {
               text: '❌ No tiene alumnos registrados. Seleccione la opción 1️⃣ para registrar un alumno.'
             });
             await enviarMenuPrincipal(bot, remitente);
@@ -142,7 +170,7 @@ async function procesarMensaje(bot, remitente, mensaje) {
               await enviarEstadoPagos(bot, remitente, estudiante);
               setTimeout(() => enviarMenuPrincipal(bot, remitente), 1500);
             } else {
-              await bot.sendMessage(remitente, {
+              await enviarMensajeConDelay(bot, remitente, {
                 text: '❌ No se encontró información del alumno registrado. Por favor contacte a administración.'
               });
               await enviarMenuPrincipal(bot, remitente);
@@ -161,7 +189,7 @@ async function procesarMensaje(bot, remitente, mensaje) {
 
             mensajeLista += '\nResponda con el número del alumno para ver su estado de pagos.';
             establecerEstado(remitente, 'SELECCION_ALUMNO', { alumnos });
-            await bot.sendMessage(remitente, { text: mensajeLista });
+            await enviarMensajeConDelay(bot, remitente, { text: mensajeLista });
           }
           break;
 
@@ -175,7 +203,7 @@ async function procesarMensaje(bot, remitente, mensaje) {
           infoMensaje += `🌐 *Sitio Web:* ${infoEscuela.sitioWeb}\n\n`;
           infoMensaje += `Escriba *menú* para volver al menú principal.`;
 
-          await bot.sendMessage(remitente, { text: infoMensaje });
+          await enviarMensajeConDelay(bot, remitente, { text: infoMensaje });
           break;
 
         case '4':
@@ -187,12 +215,12 @@ async function procesarMensaje(bot, remitente, mensaje) {
           contactoMensaje += `${infoEscuela.horario}\n\n`;
           contactoMensaje += `Escriba *menú* para volver al menú principal.`;
 
-          await bot.sendMessage(remitente, { text: contactoMensaje });
+          await enviarMensajeConDelay(bot, remitente, { text: contactoMensaje });
           break;
 
         case '5':
           if (alumnos.length === 0) {
-            await bot.sendMessage(remitente, {
+            await enviarMensajeConDelay(bot, remitente, {
               text: '❌ No tiene alumnos registrados para eliminar.'
             });
             await enviarMenuPrincipal(bot, remitente);
@@ -210,14 +238,17 @@ async function procesarMensaje(bot, remitente, mensaje) {
 
             mensajeEliminar += '\nResponda con el número del alumno que desea eliminar de su cuenta.';
             establecerEstado(remitente, 'ELIMINAR_ALUMNO', { alumnos });
-            await bot.sendMessage(remitente, { text: mensajeEliminar });
+            await enviarMensajeConDelay(bot, remitente, { text: mensajeEliminar });
           }
           break;
 
         default:
-          await bot.sendMessage(remitente, {
-            text: '❓ Opción no válida. Por favor seleccione una opción del menú.'
-          });
+          // Suppress invalid option message on first message of the day
+          if (!esPrimerMensajeDelDia) {
+            await enviarMensajeConDelay(bot, remitente, {
+              text: '❓ Opción no válida. Por favor seleccione una opción del menú.'
+            });
+          }
           await enviarMenuPrincipal(bot, remitente);
           break;
       }
@@ -228,16 +259,16 @@ async function procesarMensaje(bot, remitente, mensaje) {
         const estudiante = await buscarEstudiante(mensaje);
         if (estudiante) {
           establecerEstado(remitente, 'REGISTRO_PIN', { idEstudiante: mensaje });
-          await bot.sendMessage(remitente, {
+          await enviarMensajeConDelay(bot, remitente, {
             text: `✅ *Alumno encontrado:* ${estudiante.nombre}\n\nAhora ingrese el PIN de autorización:`
           });
         } else {
-          await bot.sendMessage(remitente, {
+          await enviarMensajeConDelay(bot, remitente, {
             text: '❌ El número de identidad no está registrado en el sistema. Verifique e intente nuevamente.'
           });
         }
       } else {
-        await bot.sendMessage(remitente, {
+        await enviarMensajeConDelay(bot, remitente, {
           text: '❌ Formato incorrecto. El número de identidad debe tener 13 dígitos numéricos.\n\nIntente nuevamente o escriba *menú* para volver al menú principal.'
         });
       }
@@ -250,13 +281,13 @@ async function procesarMensaje(bot, remitente, mensaje) {
         await registrarEncargado(remitente, estado.datos.idEstudiante);
         const estudiante = await buscarEstudiante(estado.datos.idEstudiante);
 
-        await bot.sendMessage(remitente, {
+        await enviarMensajeConDelay(bot, remitente, {
           text: `✅ *REGISTRO EXITOSO*\n\nEl alumno *${estudiante.nombre}* ha sido vinculado a su número.\n\nYa puede consultar su estado de pagos desde el menú principal.`
         });
 
         setTimeout(() => enviarMenuPrincipal(bot, remitente), 1500);
       } else {
-        await bot.sendMessage(remitente, {
+        await enviarMensajeConDelay(bot, remitente, {
           text: '❌ PIN incorrecto. Verifique e intente nuevamente o escriba *menú* para volver al menú principal.'
         });
       }
@@ -266,7 +297,7 @@ async function procesarMensaje(bot, remitente, mensaje) {
       const indice = parseInt(mensaje, 10) - 1;
 
       if (isNaN(indice) || indice < 0 || indice >= estado.datos.alumnos.length) {
-        await bot.sendMessage(remitente, {
+        await enviarMensajeConDelay(bot, remitente, {
           text: '❌ Opción no válida. Por favor seleccione un número de la lista.'
         });
       } else {
@@ -277,7 +308,7 @@ async function procesarMensaje(bot, remitente, mensaje) {
           await enviarEstadoPagos(bot, remitente, estudiante);
           setTimeout(() => enviarMenuPrincipal(bot, remitente), 1500);
         } else {
-          await bot.sendMessage(remitente, {
+          await enviarMensajeConDelay(bot, remitente, {
             text: '❌ No se encontró información del alumno seleccionado. Por favor contacte a administración.'
           });
           await enviarMenuPrincipal(bot, remitente);
@@ -289,7 +320,7 @@ async function procesarMensaje(bot, remitente, mensaje) {
       const indiceEliminar = parseInt(mensaje, 10) - 1;
 
       if (isNaN(indiceEliminar) || indiceEliminar < 0 || indiceEliminar >= estado.datos.alumnos.length) {
-        await bot.sendMessage(remitente, {
+        await enviarMensajeConDelay(bot, remitente, {
           text: '❌ Opción no válida. Por favor seleccione un número de la lista.'
         });
       } else {
@@ -297,11 +328,11 @@ async function procesarMensaje(bot, remitente, mensaje) {
         const estudiante = await buscarEstudiante(idAlumno);
 
         if (eliminarRelacion(remitente, idAlumno)) {
-          await bot.sendMessage(remitente, {
+          await enviarMensajeConDelay(bot, remitente, {
             text: `✅ El alumno *${estudiante.nombre}* ha sido eliminado de su cuenta correctamente.`
           });
         } else {
-          await bot.sendMessage(remitente, {
+          await enviarMensajeConDelay(bot, remitente, {
             text: '❌ Error al eliminar el alumno. Por favor contacte a administración.'
           });
         }
