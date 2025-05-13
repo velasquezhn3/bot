@@ -26,12 +26,38 @@ const {
   obtenerUltimoSaludo
 } = require('../services/stateService');
 const { infoEscuela, dataDir } = require('../config/config');
+const { isAdmin } = require('../services/adminService');
 
 /**
  * Envía el menú principal al usuario.
  * @param {Object} bot - Instancia del bot.
  * @param {string} remitente - Número del usuario.
  */
+async function enviarBroadcast(bot, mensaje) {
+  const fs = require('fs');
+  const { encargadosFilePath } = require('../config/config');
+
+  let encargadosDB = { encargados: {} };
+  try {
+    if (fs.existsSync(encargadosFilePath)) {
+      encargadosDB = JSON.parse(fs.readFileSync(encargadosFilePath, 'utf8'));
+    }
+  } catch (error) {
+    console.error('Error al leer encargados.json:', error);
+    return;
+  }
+
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  const destinatarios = Object.keys(encargadosDB.encargados);
+
+  for (const destinatario of destinatarios) {
+    await bot.sendMessage(destinatario, mensaje);
+    const delayMs = Math.floor(Math.random() * 15000) + 1000; // 1 to 15 seconds
+    await delay(delayMs);
+  }
+}
+
 async function enviarMenuPrincipal(bot, remitente) {
   const alumnos = obtenerAlumnosEncargado(remitente);
   let mensaje = `🏫 *BIENVENIDO AL SISTEMA ESCOLAR*\n\n`;
@@ -48,6 +74,11 @@ async function enviarMenuPrincipal(bot, remitente) {
 
   if (alumnos.length > 0) {
     mensaje += `5️⃣ *Eliminar* alumno de mi cuenta\n`;
+  }
+
+  // Add admin-only menu option
+  if (isAdmin(remitente)) {
+    mensaje += `6️⃣ *Broadcast Admin*\n`;
   }
 
   mensaje += `\nResponda con el número de la opción deseada.`;
@@ -122,7 +153,7 @@ async function enviarMensajeConDelay(bot, remitente, mensaje) {
  * @param {string} remitente - Número del usuario.
  * @param {string} mensaje - Texto del mensaje recibido.
  */
-async function procesarMensaje(bot, remitente, mensaje) {
+async function procesarMensaje(bot, remitente, mensaje, mensajeObj) {
   const estado = obtenerEstado(remitente);
   const alumnos = obtenerAlumnosEncargado(remitente);
   const textoMinuscula = mensaje.toLowerCase();
@@ -143,6 +174,19 @@ async function procesarMensaje(bot, remitente, mensaje) {
     return;
   }
 
+  // Check for broadcast command from admin
+  if (textoMinuscula.startsWith('broadcast ') || textoMinuscula.startsWith('bc ')) {
+    if (!isAdmin(remitente)) {
+      await bot.sendMessage(remitente, { text: '❌ No tiene permisos para enviar mensajes broadcast.' });
+      return;
+    }
+    // Remove the command prefix and get the rest of the message as broadcast content
+    // Instead of extracting text, forward the entire message object for broadcast
+    await enviarBroadcast(bot, mensajeObj);
+    await bot.sendMessage(remitente, { text: '✅ Mensaje broadcast enviado a todos los encargados.' });
+    return;
+  }
+
   if (textoMinuscula === 'menu' || textoMinuscula === 'menú') {
     await enviarMenuPrincipal(bot, remitente);
     return;
@@ -158,6 +202,20 @@ async function procesarMensaje(bot, remitente, mensaje) {
           });
           break;
 
+        case '6':
+          if (isAdmin(remitente)) {
+            establecerEstado(remitente, 'MENU_ADMIN_BROADCAST');
+            await enviarMensajeConDelay(bot, remitente, {
+              text: '📢 *MENÚ BROADCAST ADMIN*\n\nPor favor, envíe cualquier mensaje (texto, foto, video, etc.) para enviarlo a todos los encargados.\nEscriba *menú* para volver al menú principal.'
+            });
+          } else {
+            await enviarMensajeConDelay(bot, remitente, {
+              text: '❌ Opción no válida.'
+            });
+            await enviarMenuPrincipal(bot, remitente);
+          }
+          break;
+
         case '2':
           if (alumnos.length === 0) {
             await enviarMensajeConDelay(bot, remitente, {
@@ -166,10 +224,11 @@ async function procesarMensaje(bot, remitente, mensaje) {
             await enviarMenuPrincipal(bot, remitente);
           } else if (alumnos.length === 1) {
             const estudiante = await buscarEstudiante(alumnos[0]);
-            if (estudiante) {
-              await enviarEstadoPagos(bot, remitente, estudiante);
-              setTimeout(() => enviarMenuPrincipal(bot, remitente), 1500);
-            } else {
+if (estudiante) {
+  await enviarEstadoPagos(bot, remitente, estudiante);
+  await delay(15000);
+  await enviarMenuPrincipal(bot, remitente);
+} else {
               await enviarMensajeConDelay(bot, remitente, {
                 text: '❌ No se encontró información del alumno registrado. Por favor contacte a administración.'
               });
@@ -441,7 +500,7 @@ if (statusCode === 401) {
         }
 
         if (texto) {
-          await procesarMensaje(bot, remitente, texto);
+          await procesarMensaje(bot, remitente, texto, msg.message);
         }
       }
     });
